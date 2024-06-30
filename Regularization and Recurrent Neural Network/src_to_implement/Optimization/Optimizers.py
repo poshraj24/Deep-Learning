@@ -1,35 +1,43 @@
 import numpy as np
 import math
 
-#RNN Implementation starts here
 class Optimizer:
-    def __init__(self,learning_rate=None):
+    def __init__(self, learning_rate= None):
         self.regularizer = None
-    
+
     def add_regularizer(self, regularizer):
         self.regularizer = regularizer
-        
+
 class Sgd(Optimizer):
-    
     def __init__(self, learning_rate: float):
+        super().__init__()
         self.learning_rate = learning_rate
 
     def calculate_update(self, weight_tensor, gradient_tensor):
-        weight_tensor += -self.learning_rate*gradient_tensor #updates the weight using GD
-        return weight_tensor
+        updated_weight = weight_tensor-self.learning_rate*gradient_tensor
+        if self.regularizer is not None:
+            updated_weight = updated_weight - self.learning_rate*self.regularizer.calculate_gradient(weight_tensor)
+        return updated_weight
     
-class  SgdWithMomentum(Optimizer):
+
+class SgdWithMomentum(Optimizer):
     def __init__(self, learning_rate: float, momentum_rate:float):
-        self.learning_rate=learning_rate
+        super().__init__()
+        self.learning_rate = learning_rate
         self.momentum_rate=momentum_rate
-        self.previous_gradient=0
+        self.prev_gradient = 0
 
-    def calculate_update(self,weight_tensor, gradient_tensor):
-        self.previous_gradient = self.previous_gradient * self.momentum_rate - self.learning_rate * gradient_tensor
-        return self.previous_gradient + weight_tensor
 
+    def calculate_update(self, weight_tensor, gradient_tensor):
+        self.prev_gradient = self.prev_gradient * self.momentum_rate - self.learning_rate * gradient_tensor
+        updated_weight = self.prev_gradient + weight_tensor - (
+            self.learning_rate * self.regularizer.calculate_gradient(weight_tensor) if self.regularizer is not None else 0
+        )
+        return updated_weight
+    
 class Adam(Optimizer):
     def __init__(self, learning_rate: float, mu:float, rho: float):
+        super().__init__()
         self.learning_rate = learning_rate
         self.mu=mu
         self.rho=rho
@@ -39,7 +47,7 @@ class Adam(Optimizer):
         self.counter_var =1
 
 
-    def calculate_update(self, weight_tensor, gradient_tensor):        
+    def calculate_update(self, weight_tensor, gradient_tensor):
         gk = gradient_tensor
         self.moving_average_of_grad = gk + self.mu * (self.moving_average_of_grad - gk)
         squared_grad_update = (1 - self.rho) * np.square(gk) 
@@ -51,6 +59,10 @@ class Adam(Optimizer):
         eps = math.ulp(1.0)
         denominator = np.sqrt(rcap) + eps
         gradient_tensor = vcap / denominator
-        return weight_tensor - self.learning_rate * gradient_tensor
-    
+        updated_weight = weight_tensor - self.learning_rate * gradient_tensor
 
+        if self.regularizer is not None:
+            reg_gradient = self.regularizer.calculate_gradient(weight_tensor)
+            updated_weight -= self.learning_rate * reg_gradient
+            
+        return updated_weight

@@ -1,127 +1,131 @@
 import numpy as np
+
 from Layers.Base import *
-from Layers.Helpers import *
-from functools import partial
+from Layers.Helpers import compute_bn_gradients
 
 class BatchNormalization(BaseLayer):
     def __init__(self, channels):
         super().__init__()
         self.channels = channels
-        self.gamma = np.ones(channels, dtype=float)
-        self.beta = np.zeros(channels, dtype=float)
-        self.epsilon = 1e-8
-        self.trainable = True
-        self.testing_phase = False
-        self.mean = None
-        self.var = None
-        self.optimizer = None
-        self.gradient_tensor = None
-        
-    @property
-    def gradient_weights(self):
-        return self._gradient_weights
+        self.trainable=True
 
-    @gradient_weights.setter
-    def gradient_weights(self, value):
-        self._gradient_weights = value
+        # initialize weights(gamma) and bias(beta)
+        self.initialize(None,None)
 
-    @property
-    def gradient_bias(self):
-        return self._gradient_bias
+        self.alpha=0.8
 
-    @gradient_bias.setter
-    def gradient_bias(self, value):
-        self._gradient_bias = value
+        # for forward
+        self.epsilon = 1e-11 # smaller than 1e-10
+        self.test_mean = 0
+        self.test_var = 1
+        self.xhat=0
+        self.mean=0
+        self.var=0
 
-    @property
-    def optimizer(self):
-        return self._optimizer
-
-    @optimizer.setter
-    def optimizer(self, value):
-        self._optimizer = value
+        # for backward
+        self._gradient_bias = None
+        self._gradient_weights = None
+        self._optimizer = None
+        self._bias_optimizer = None
 
     @property
     def bias_optimizer(self):
         return self._bias_optimizer
 
     @bias_optimizer.setter
-    def bias_optimizer(self, value):
-        self._bias_optimizer = value
+    def bias_optimizer(self, opt):
+        self._bias_optimizer = opt
 
+    @property
+    def optimizer(self):
+        return self._optimizer
+    
+    @optimizer.setter
+    def optimizer(self, opt):
+        self._optimizer = opt
+
+    @property
+    def gradient_weights(self):
+        return self._gradient_weights
+
+    @gradient_weights.setter
+    def gradient_weights(self, x):
+        self._gradient_weights = x
+
+    @property
+    def gradient_bias(self):
+        return self._gradient_bias
+
+    @gradient_bias.setter
+    def gradient_bias(self, x):
+        self._gradient_bias = x
+
+    
     def initialize(self, weights_initializer, bias_initializer):
-        self.weights= np.ones(self.channels, dtype=float)
-        self.bias = np.zeros(self.channels, dtype=float)
-
+        self.weights = np.ones(self.channels)
+        self.bias = np.zeros(self.channels)
+    
     def reformat(self, input_tensor):
-        if len(input_tensor.shape) == 4:
-            N, C, H, W = input_tensor.shape
-            return input_tensor.reshape(N, C*H*W)
-        else:
-            return input_tensor
-
-
+        return input_tensor.reshape(-1, self.channels)
+    
     def forward(self, input_tensor):
         self.input_tensor = input_tensor
-        self.is_conv = len(input_tensor.shape) == 4
-        axes = {True: (0, 2, 3), False: 0}
-        mean_ax = axes[self.is_conv]
-        var_ax = axes[self.is_conv]
-        mean_func = lambda x, axis: np.mean(x, axis=axis)
-        var_func = lambda x, axis: np.var(x, axis=axis)
-        self.mean = mean_func(input_tensor, mean_ax)
-        self.var = var_func(input_tensor, var_ax)
+        
+        is_conv = len(input_tensor.shape) == 4
+        self.is_conv=is_conv
+        mean_ax=0 if not is_conv else (0, 2, 3)
+        var_ax=0 if not is_conv else (0, 2, 3)
 
-        if self.is_conv == False:
-            self.xhat = (
-            (input_tensor - self.test_mean) / np.sqrt(self.test_var + self.epsilon)
-            if self.testing_phase
-            else (self.input_tensor - self.mean) / np.sqrt(self.var + self.epsilon))
-       
-            if not self.testing_phase:
-                self.test_mean = self.alpha * self.mean + (1 - self.alpha) * self.mean
-                self.test_var = self.alpha * self.var + (1 - self.alpha) * self.var
+        self.mean = np.mean(input_tensor, 
+        axis=mean_ax)
+        self.var = np.var(input_tensor, 
+        axis=var_ax)
+
+        if not self.is_conv:
+            if self.testing_phase:
+                self.xhat = (input_tensor - self.test_mean) / np.sqrt(self.test_var + self.epsilon)
+            else:
+                self.test_mean = self.alpha * self.mean + (1-self.alpha)*self.mean
+                self.test_var = self.alpha * self.var + (1-self.alpha)*self.var
+
+                self.xhat = (self.input_tensor-self.mean)/np.sqrt(self.var+self.epsilon)
             return self.weights*self.xhat + self.bias
         else:
             bsize,channels,*_ = input_tensor.shape
             if self.testing_phase:
-                inv_stddev = np.reciprocal(np.sqrt(self.test_var.reshape((1, channels, 1, 1)) + self.epsilon))
-                return (self.input_tensor - self.test_mean.reshape((1, channels, 1, 1))) * inv_stddev
-            new_mean = np.average(self.input_tensor, axis=mean_ax)  # Equivalent to np.mean
-            new_var =  np.nanvar(self.input_tensor, axis=var_ax)  # Handles NaNs (if relevant)
-            reshaped_mean = self.mean.reshape((1, channels, 1, 1))
-            reshaped_var = self.var.reshape((1, channels, 1, 1))
+                return (self.input_tensor-self.test_mean.reshape((1, channels, 1, 1)))/(self.test_var.reshape((1, channels, 1, 1))+self.epsilon)**0.5
+                
+            new_mean = np.mean(self.input_tensor, axis=mean_ax)
+            new_var = np.var(self.input_tensor, axis=var_ax)
 
-            self.test_mean = self.alpha * reshaped_mean + (1 - self.alpha) * new_mean.reshape(
-                (1, channels, 1, 1)
-            )
-            self.test_var = self.alpha * reshaped_var + (1 - self.alpha) * new_var.reshape(
-                (1, channels, 1, 1)
-            )
+            self.test_mean = self.alpha*self.mean.reshape((1, channels, 1, 1)) + (1 - self.alpha) * new_mean.reshape(
+                (1, channels, 1, 1))
+            self.test_var = self.alpha* self.var.reshape((1, channels, 1, 1)) + (
+                    1 - self.alpha) * new_var.reshape((1, channels, 1, 1))
+
             self.mean = new_mean
             self.var = new_var
-
-            reshaped_mean = self.mean.reshape((1, channels, 1, 1))
-            reshaped_var = self.var.reshape((1, channels, 1, 1))
-
-            self.xhat = (self.input_tensor - reshaped_mean) / np.sqrt(reshaped_var + self.epsilon)
-            self.weights.shape = (1, channels, 1, 1)  
-            self.bias.shape = (1, channels, 1, 1)
-
-            return self.weights * self.xhat + self.bias
+            
+            self.xhat= (self.input_tensor - self.mean.reshape((1, channels, 1, 1))) / np.sqrt(
+            self.var.reshape((1, channels, 1, 1)) + self.epsilon)
+           
+            return self.weights.reshape((1, channels, 1, 1)) * self.xhat + self.bias.reshape((1, channels, 1, 1))
     
     def backward(self, error_tensor):
-        axis = not self.is_conv * (0,) or self.is_conv * (0, 2, 3) 
-        if self.is_conv: 
-            compute_bn_grads_with_params = partial(compute_bn_gradients, weights=self.weights, mean=self.mean, var=self.var, epsilon=self.epsilon)
-            
+        
+        axis = 0 if not self.is_conv else (0,2,3)
 
-            err_here = compute_bn_grads_with_params(self.reformat(error_tensor), self.reformat(self.input_tensor))
+        if self.is_conv:
+            err_here = compute_bn_gradients(self.reformat(error_tensor), self.reformat(self.input_tensor),
+                                       self.weights, self.mean, self.var, self.epsilon)
             err_here = self.reformat(err_here)
+
         else:
-            err_here = compute_bn_gradients(error_tensor, self.input_tensor, self.mean, self.var, self.epsilon, self.weights)
-        self.gradient_weights = np.tensordot(error_tensor, self.xhat, axes=(axis, axis))
-        self.gradient_bias = np.tensordot(error_tensor, np.ones_like(error_tensor), axes=(axis, axis))
+            err_here = compute_bn_gradients(error_tensor, self.input_tensor, self.weights, self.mean, self.var,
+                                       self.epsilon)
+
+        self.gradient_weights = np.sum(error_tensor * self.xhat, axis=axis)
+        self.gradient_bias = np.sum(error_tensor, axis=axis)
 
         if self.optimizer:
             self.weights = self.optimizer.calculate_update(self.weights, self._gradient_weights)
@@ -129,20 +133,21 @@ class BatchNormalization(BaseLayer):
             self.bias = self.bias_optimizer.calculate_update(self.bias, self._gradient_bias)
 
         return err_here
-    
-    def reformat(self,tensor):
-        make_2d = [False, True][len(tensor.shape) == 4]
+
+    def reformat(self, tensor):
+        make_2d = len(tensor.shape) == 4
+        # if conv, then batch, ex, r, c =>batch, ex, r*c to batch*rc, ex by transposing (0,2,1)
+        # if not conv, then to batch, ex, r, c by transposing
         if make_2d:
             batch, ex, r, c = tensor.shape
-            out = tensor.reshape(batch, ex, r * c).transpose(0, 2, 1).reshape(-1, ex)
+            out = tensor.reshape((batch, ex, r * c))
+            out = np.transpose(out, (0, 2, 1))
+            batch, rc, ex = out.shape
+            out = out.reshape((batch * rc, ex))
         else:
             batch, ex, r, c = self.input_tensor.shape
-            out = tensor.reshape((batch, r * c, ex)).transpose(0, 2, 1).reshape(batch, ex, r, c)  
-
+            out = tensor.reshape((batch, r * c, ex))
+            out = np.transpose(out, (0, 2, 1))
+            out = out.reshape((batch, ex, r, c))
 
         return out
-
-
-                 
-
-        

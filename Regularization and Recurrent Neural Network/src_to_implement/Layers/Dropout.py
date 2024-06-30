@@ -2,18 +2,26 @@ import numpy as np
 
 from Layers.Base import *
 
+
 class Dropout(BaseLayer):
+
     def __init__(self, probability):
         super().__init__()
-        self.probability = probability
+
+        self.prob = probability
         self.mask = None
 
     def forward(self, input_tensor):
+        # if testing no need to
         if self.testing_phase:
             return input_tensor
-        else:
-            self.mask = np.random.binomial(1, self.probability, size=input_tensor.shape)
-            return (input_tensor * self.mask) / self.probability
+
+        self.mask = np.random.rand(*input_tensor.shape) < self.prob
+        return (input_tensor*self.mask) / self.prob
+
 
     def backward(self, error_tensor):
-        return (error_tensor * self.mask) / self.probability
+
+        return (self.mask*error_tensor  ) / self.prob
+
+

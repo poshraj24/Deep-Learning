@@ -7,8 +7,10 @@ class TanH(BaseLayer):
         self.out=None
 
     def forward(self, input_tensor):
-        self.input_tensor = input_tensor 
-        return np.tanh(input_tensor)
+        self.out = np.tanh(input_tensor)
+        
+        return self.out
 
     def backward(self, error_tensor):
-        return np.multiply(error_tensor, (1 - np.tanh(self.input)**2))
+        return (1 - self.out**2) * error_tensor
+

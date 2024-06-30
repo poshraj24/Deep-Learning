@@ -18,6 +18,8 @@ class FullyConnected(BaseLayer):
         self.trainable=True
         self._optimizer=None
         self.gradient_tensor=None
+        self.input_tensor=None
+        self.gradient_weights=None
 
     #added initializer for CNN
     def initialize(self, weights_initializer, bias_initializer):
@@ -51,18 +53,16 @@ class FullyConnected(BaseLayer):
         # Gradients on parameters
         self.error_tensor = error_tensor @ self.weights[:-1, :].T
         
-        self._gradient_tensor = self.input_tensor.T @ error_tensor
+        gradient_tensor = self.input_tensor.T @ error_tensor
         #gradient on values
         self.dinputs = error_tensor @ self.weights[:-1, :].T
+        self.gradient_weights = gradient_tensor
+
         
         
         if self.optimizer != None:
-            self.weights = self.optimizer.calculate_update(self.weights, self._gradient_tensor)
+            self.weights = self.optimizer.calculate_update(self.weights, gradient_tensor)
             #self.biases = self.optimizer.calculate_update(self.biases, np.mean(error_tensor, axis=0, keepdims=True))
         return self.error_tensor
     
-    @property
-    def gradient_weights(self):
-        
-        return self._gradient_tensor
-
+    
