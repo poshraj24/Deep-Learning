@@ -21,16 +21,6 @@ class RNN(BaseLayer):
         self._memorize = False
         self._optimizer = None
         self._gradient_weights = None
-
-        # Elman network has tanh activation function and 
-        # sigmoid activation function (to add non-linearity to output) 
-        # in hidden layers
-        # input - > Hidden(FullyConnected -> tanh ->  FullyConnected-> sigmoid ) -> Output
-        # Output of Hidden is sent as input to the Hidden layer in next step (some sort of memory)
-        # hidden fcl will accept input of size (input_size + hidden_size)
-        # where input size is example dataset size and 
-        # hidden_size is the size of output of hidden layer i.e. hidden_size
-
         self.tanh = TanH()
         self.sigmoid = Sigmoid()
         self.hidden_fcl = FullyConnected(self.input_size + self.hidden_size, self.hidden_size)
@@ -92,93 +82,82 @@ class RNN(BaseLayer):
         self.tanh_outputs = []
         self.output_fc_input_tensors = []
         self.hidden_fcl_input_tensors = []
-        previous_hstate = self.hidden_state if self.memorize else np.zeros(self.hidden_size)
-        batch_size,*_ = input_tensor.shape
+        previous_hstate = self.hidden_state.copy() if self.memorize else np.zeros(self.hidden_size)
+        batch_size = input_tensor.shape[0]
         output_tensor = np.zeros((batch_size,self.output_size))
 
         # for each batch dimension or time dimension?
-        for i in range(input_tensor.shape[0]):
+        for i, inp_r in enumerate(input_tensor):
             # for first step, input will be input_tensor and 0
             # for next steps, input will be input_tensor and previous hidden state
             # use the hidden state as input to the hidden layer
-            new_input = np.concatenate([previous_hstate, input_tensor[i]]).reshape(1, -1)
+            n_inp = np.concatenate([[previous_hstate], [inp_r]], axis=1)
 
-            input_to_tanh = self.hidden_fcl.forward(new_input)
-            # current hidden state will be output of tanh
-            # this is the hidden state that will be used in next step
-            tanh_output = self.tanh.forward(input_to_tanh)
-            current_hstate = tanh_output
-            previous_hstate = tanh_output[0]
+            curr_hstate = self.tanh.forward(self.hidden_fcl.forward(n_inp))
+            previous_hstate = curr_hstate[0]
 
-            # use the tanh output as input to the FC layer before sigmoid layer 
-            input_to_sigmoid = self.output_fcl.forward(tanh_output)
-            sigmoid_output = self.sigmoid.forward(input_to_sigmoid)
-
-            output_tensor[i]=sigmoid_output[0]
+            output_tensor[i] = self.sigmoid.forward(self.output_fcl.forward(curr_hstate))[0]
 
             # store inputs and outputs for backprop
-            self.hidden_fcl_input_tensors.append(self.hidden_fcl.input_tensor)
-            self.output_fc_input_tensors.append(self.output_fcl.input_tensor)
-            self.sigmoid_outputs.append(self.sigmoid.out)
-            self.tanh_outputs.append(self.tanh.out)
+            self.hidden_fcl_input_tensors += [self.hidden_fcl.input_tensor]
+            self.output_fc_input_tensors += [self.output_fcl.input_tensor]
+            self.sigmoid_outputs += [self.sigmoid.out]
+            self.tanh_outputs += [self.tanh.out]
 
         # update hidden state
-        self.hidden_state = current_hstate[0]
+        self.hidden_state = curr_hstate[0]
 
         return output_tensor
 
     def backward(self, error_tensor):
-        # get gradient wts for hidden fcl and output fcl
-        self.gradient_weights = np.zeros_like(self.hidden_fcl.weights)
-        self.output_fcl_gradient_weights = np.zeros_like(self.output_fcl.weights)
+        # Initialize gradients for weights of hidden and output fully connected layers
+        self.gradient_weights = np.zeros(self.hidden_fcl.weights.shape)
+        self.output_fcl_gradient_weights = np.zeros(self.output_fcl.weights.shape)
         
-        gradient_prev_hstate = 0
-        batch_size,*_ = error_tensor.shape
-        gradient_wrt_inputs = np.zeros((batch_size,self.input_size))
+        hstate_prev_grad = 0
+        batch_size = error_tensor.shape[0]
+        gradient_wrt_inputs = np.zeros((batch_size, self.input_size))
 
-        # for each time dimension, we need to calculate the gradient
-        # and sum them up just to make it look like using memory to update :P
-        for step in range(error_tensor.shape[0] - 1, -1, -1):
-            # what was the output of sigmoid layer at step `step`? 
-            # we need to use that to calculate the error in this layer at this step
+        # Iterate through each time step in reverse order
+        for step in reversed(range(error_tensor.shape[0])):
+            # Retrieve the sigmoid output at the current time step
             self.sigmoid.out = self.sigmoid_outputs[step]
             sigmoid_error = self.sigmoid.backward(error_tensor[step])
 
-            # what was the input to the output layer at step `step`?
-            # since sigmoid is last, we pass sigmoid error backward to this layer
-            # but again it should use output at that step to calculate error at that step
-            self.output_fcl.input_tensor = self.output_fc_input_tensors[step]
+            # Retrieve the input to the output layer at the current time step and compute the error
+            temp_input_tensor = self.output_fc_input_tensors[step]
+            self.output_fcl.input_tensor = temp_input_tensor
             output_fcl_error = self.output_fcl.backward(sigmoid_error)
 
-            # same as above two steps except, 
-            # we need to add the gradient from previous hidden state
-            # this is where the memory comes in while updating the weights 
+            # Retrieve the tanh output at the current time step
             self.tanh.out = self.tanh_outputs[step]
-            tanh_error = self.tanh.backward(output_fcl_error + gradient_prev_hstate)
+            tanh_error = self.tanh.backward(output_fcl_error + hstate_prev_grad)
 
-            # pass error in tanh to the hidden layer now
+            # Pass the error in tanh to the hidden layer
             self.hidden_fcl.input_tensor = self.hidden_fcl_input_tensors[step]
             hidden_fcl_error = self.hidden_fcl.backward(tanh_error)
 
-            # split the error in hidden layer into two parts
-            # one part is for the hidden state and the other is for the input
-            gradient_prev_hstate = hidden_fcl_error[:, :self.hidden_size]
-            gradient_with_respect_to_input = hidden_fcl_error[:, self.hidden_size:]
-            gradient_wrt_inputs[step]=gradient_with_respect_to_input[0]
+            # Split the error in the hidden layer into two parts: hidden state and input
+            hstate_prev_grad, _ = np.split(hidden_fcl_error, [self.hidden_size], axis=1)
+            gradient_with_respect_to_input = np.array_split(hidden_fcl_error, [self.hidden_size], axis=1)[1]
+            gradient_wrt_inputs[step] = gradient_with_respect_to_input[0]
 
-            # sum up the gradient weights for hidden fcl and output fcl
-            # this is what used while updating the weights
-            # the gradients are not only dependent on the current step
-            # but also on the previous (batch_size) steps
-            self.gradient_weights+=self.hidden_fcl.gradient_weights
-            self.output_fcl_gradient_weights+=self.output_fcl.gradient_weights
+            # Accumulate the gradient weights for hidden and output fully connected layers
+            self.gradient_weights = np.add(self.gradient_weights, self.hidden_fcl.gradient_weights)
+            self.output_fcl_gradient_weights = np.add(self.output_fcl_gradient_weights, self.output_fcl.gradient_weights)
 
-
+        # Update the weights using the accumulated gradients
         if self.optimizer:
-            self.output_fcl.weights = self.optimizer.calculate_update(self.output_fcl.weights,
-                                                                           self.output_fcl_gradient_weights)
-            self.weights = self.optimizer.calculate_update(self.weights, self.gradient_weights)
+            self.output_fcl.weights = self.optimizer.calculate_update(
+                self.output_fcl.weights, self.output_fcl_gradient_weights
+            )
+            self.hidden_fcl.weights = self.optimizer.calculate_update(
+                self.hidden_fcl.weights, self.gradient_weights
+            )
 
         return gradient_wrt_inputs
+
+
+
 
     
