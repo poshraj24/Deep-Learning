@@ -1,22 +1,5 @@
 from copy import deepcopy
-def save(filename, net):
-    import pickle
-    nnet=net
-    dlayer = nnet.data_layer
-    nnet.__setstate__({'data_layer': None})
 
-    with open(filename, 'wb') as f:
-        pickle.dump(nnet, f)
-    nnet.__setstate__({'data_layer': dlayer})
-    
-
-def load(filename, data_layer):
-    import pickle
-    with open(filename, 'rb') as f:
-        net = pickle.load(f)
-        net.__setstate__({'data_layer': data_layer})
-        
-    return net
 class NeuralNetwork:
     def __init__(self, optimizer, weights_initializer, bias_initializer) -> None:
         self.optimizer = optimizer
@@ -27,12 +10,7 @@ class NeuralNetwork:
         self.weights_initializer = weights_initializer
         self.bias_initializer = bias_initializer
 
-    def __getstate__(self):
-        return self.__dict__.copy()
-    
-    def __setstate__(self, state):
-        self.__dict__.update(state)
-        return self.__dict__.copy()
+
     
     @property
     def phase(self):
