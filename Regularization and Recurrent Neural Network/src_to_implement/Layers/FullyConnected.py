@@ -51,7 +51,7 @@ class FullyConnected(BaseLayer):
     # Backward pass
     def backward(self, error_tensor):
         # Gradients on parameters
-        self.error_tensor = error_tensor @ self.weights[:-1, :].T
+        self.error_tensor = np.dot(error_tensor,np.delete(self.weights, -1, 0).T)
         
         gradient_tensor = self.input_tensor.T @ error_tensor
         #gradient on values
