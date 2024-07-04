@@ -13,11 +13,8 @@ class Dropout(BaseLayer):
 
     def forward(self, input_tensor):
         # if testing no need to
-        if self.testing_phase:
-            return input_tensor
-
-        self.mask = np.random.rand(*input_tensor.shape) < self.prob
-        return (input_tensor*self.mask) / self.prob
+        self.mask = np.random.rand(*input_tensor.shape) < self.prob if not self.testing_phase else np.ones_like(input_tensor)
+        return input_tensor if self.testing_phase else (input_tensor * self.mask) / self.prob
 
 
     def backward(self, error_tensor):
